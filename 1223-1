@@ -1,0 +1,208 @@
+# 這是 Google Colab 專案，需要安裝 Gradio 和 Pandas 兩個庫
+!pip install gradio pandas
+
+import gradio as gr
+import pandas as pd
+import os
+import uuid # 用於生成唯一的物品 ID
+
+# --- P1: 系統資料管理模組 (Storage & Data Persistence) ---
+FILE_PATH = 'exchange_items.csv'
+
+# 定義基礎資料結構的欄位
+COLUMNS = ['ID', '名稱', '類別', '描述', '狀態', '聯絡資訊', '刊登日期']
+
+def load_items():
+    """從 CSV 檔案載入物品清單，如果檔案不存在則創建新的 DataFrame"""
+    if os.path.exists(FILE_PATH):
+        try:
+            # 嘗試讀取 CSV
+            df = pd.read_csv(FILE_PATH)
+            # 確保 ID 是字串，以防讀取時自動轉型
+            df['ID'] = df['ID'].astype(str)
+        except pd.errors.EmptyDataError:
+            # 檔案存在但為空時，創建空 DataFrame
+            df = pd.DataFrame(columns=COLUMNS)
+    else:
+        # 檔案不存在時，創建空 DataFrame
+        df = pd.DataFrame(columns=COLUMNS)
+    return df
+
+def save_items(df):
+    """將物品清單存回 CSV 檔案"""
+    df.to_csv(FILE_PATH, index=False)
+
+# 在程式啟動時載入一次資料
+items_df = load_items()
+
+
+# --- P2: 刊登與刪除介面 (Posting & Deleting) ---
+
+def add_item_to_list(name, category, description, contact):
+    """新增物品功能 (對應故事 1)"""
+    global items_df
+    if not all([name, category, description, contact]):
+        return "❌ 錯誤：所有欄位都必須填寫！", items_df
+
+    # 生成唯一的 ID
+    new_id = str(uuid.uuid4())[:8]
+
+    # 建立新物品的資料列
+    new_item = pd.DataFrame([{
+        'ID': new_id,
+        '名稱': name,
+        '類別': category,
+        '描述': description,
+        '狀態': '待交換', # 預設狀態
+        '聯絡資訊': contact,
+        '刊登日期': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')
+    }])
+
+    # 加入到主 DataFrame
+    items_df = pd.concat([items_df, new_item], ignore_index=True)
+    save_items(items_df) # 儲存資料 (對應故事 7)
+    return f"✅ 成功刊登！物品ID: {new_id}。記得分享給需要的同學！", items_df
+
+def delete_item_by_id(item_id):
+    """刪除物品功能 (對應故事 6)"""
+    global items_df
+    if not item_id:
+        return "❌ 錯誤：請輸入有效的物品 ID。", items_df
+
+    initial_count = len(items_df)
+    # 刪除匹配 ID 的行
+    items_df = items_df[items_df['ID'] != item_id]
+
+    if len(items_df) < initial_count:
+        save_items(items_df)
+        return f"✅ 成功刪除 ID 為 {item_id} 的物品。", items_df
+    else:
+        return f"❌ 刪除失敗：找不到 ID 為 {item_id} 的物品。", items_df
+
+
+# --- P3: 清單顯示 (Display) (在 Gradio 中由 Dataframe 組件自動實現) ---
+# --- P4: 搜尋與篩選邏輯 (Search & Filter) ---
+
+def search_and_filter(keyword, category_filter):
+    """根據關鍵字和類別進行搜尋 (對應故事 3)"""
+    df = items_df.copy() # 複製一份，避免修改原始資料
+    message = "✅ 這是目前的交換清單："
+
+    # 1. 類別篩選
+    if category_filter and category_filter != "所有類別":
+        df = df[df['類別'] == category_filter]
+        message = f"✅ 這是 '{category_filter}' 類別的物品清單："
+
+    # 2. 關鍵字搜尋
+    if keyword:
+        # 搜尋 名稱 或 描述 欄位
+        df = df[df['名稱'].str.contains(keyword, case=False, na=False) |
+                df['描述'].str.contains(keyword, case=False, na=False)]
+        message = f"✅ 這是搜尋關鍵字 '{keyword}' 的結果清單："
+
+    if df.empty:
+        message = "❌ 找不到符合條件的物品。"
+
+    return message, df
+
+
+# --- P5: 狀態更新與主選單 (Controller) ---
+
+def update_item_status(item_id, new_status):
+    """更新物品狀態功能 (對應故事 5)"""
+    global items_df
+    if not item_id or not new_status:
+        return "❌ 錯誤：請輸入 ID 並選擇新狀態。", items_df
+
+    # 檢查 ID 是否存在
+    if item_id in items_df['ID'].values:
+        # 使用 .loc 進行精準修改
+        items_df.loc[items_df['ID'] == item_id, '狀態'] = new_status
+        save_items(items_df)
+        return f"✅ 成功將 ID {item_id} 的狀態更新為 '{new_status}'。", items_df
+    else:
+        return f"❌ 狀態更新失敗：找不到 ID 為 {item_id} 的物品。", items_df
+
+
+# -----------------------------------------------------
+# --- Gradio 介面設定 (實現故事 8) ---
+# -----------------------------------------------------
+
+# 取得目前所有的類別供下拉選單使用
+def get_categories():
+    categories = items_df['類別'].unique().tolist()
+    return ["所有類別"] + categories if categories else ["所有類別", "課本", "生活用品", "電子產品", "其他"]
+
+with gr.Blocks(title="校園二手物資交換平臺助手") as demo:
+    gr.Markdown("# 📚 校園二手物資交換平臺助手")
+    gr.Markdown("歡迎使用校園交換助手！請在下方標籤頁切換功能。")
+
+    status_message = gr.Textbox(label="系統訊息", interactive=False, value="系統啟動成功！", visible=True)
+
+    # 使用 Dataframe 組件顯示清單 (對應故事 2, 4)
+    item_display = gr.Dataframe(
+        value=items_df,
+        headers=COLUMNS,
+        label="物品交換清單",
+        interactive=False, # 不允許使用者直接修改表格
+        row_count=(1, "dynamic"),
+        col_count=len(COLUMNS) # 修改這裡：將 "dynamic" 改為 len(COLUMNS) 以匹配 headers 數量
+    )
+
+    with gr.Tab("物品刊登 🚀"):
+        gr.Markdown("### 刊登新物品 (故事 1)")
+        name_in = gr.Textbox(label="物品名稱", placeholder="例如：微積分課本 (上)")
+        category_in = gr.Dropdown(get_categories(), label="類別", value="課本")
+        desc_in = gr.Textbox(label="簡短描述", placeholder="例如：九成新，書皮有輕微摺痕")
+        contact_in = gr.Textbox(label="聯絡資訊 (Email/分機/Line ID)", placeholder="例如：johnny@stu.ntu.edu.tw")
+        add_btn = gr.Button("刊登物品")
+
+    with gr.Tab("搜尋與篩選 🔍"):
+        gr.Markdown("### 搜尋交換物品 (故事 3)")
+        keyword_search = gr.Textbox(label="關鍵字搜尋", placeholder="輸入物品名稱或描述中的字詞")
+        category_filter_dd = gr.Dropdown(get_categories(), label="依類別篩選", value="所有類別")
+        search_btn = gr.Button("開始搜尋/顯示所有")
+
+    with gr.Tab("狀態管理 (刊登者) 🔧"):
+        gr.Markdown("### 物品狀態變更與刪除 (故事 5, 6)")
+        status_id_in = gr.Textbox(label="物品 ID", placeholder="輸入要變更狀態的物品 ID")
+        status_dd = gr.Dropdown(['待交換', '預訂', '已成交'], label="選擇新狀態", value='待交換')
+        update_btn = gr.Button("更新物品狀態")
+
+        gr.Markdown("---")
+        delete_id_in = gr.Textbox(label="物品 ID", placeholder="輸入要刪除的物品 ID")
+        delete_btn = gr.Button("刪除物品")
+
+
+    # --- 事件處理 (將按鈕與函式綁定) ---
+
+    # 刊登
+    add_btn.click(
+        add_item_to_list,
+        inputs=[name_in, category_in, desc_in, contact_in],
+        outputs=[status_message, item_display]
+    )
+
+    # 搜尋/篩選
+    search_btn.click(
+        search_and_filter,
+        inputs=[keyword_search, category_filter_dd],
+        outputs=[status_message, item_display]
+    )
+
+    # 狀態更新
+    update_btn.click(
+        update_item_status,
+        inputs=[status_id_in, status_dd],
+        outputs=[status_message, item_display]
+    )
+
+    # 刪除
+    delete_btn.click(
+        delete_item_by_id,
+        inputs=[delete_id_in],
+        outputs=[status_message, item_display]
+    )
+
+# 啟動 Gradio 介面，使用 share=True 確保在 Colab 上可用
+demo.launch(share=True)
